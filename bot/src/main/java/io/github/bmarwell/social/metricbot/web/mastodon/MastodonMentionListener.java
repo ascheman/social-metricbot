@@ -19,12 +19,12 @@ import io.github.bmarwell.social.metricbot.common.MastodonConfig;
 import io.github.bmarwell.social.metricbot.mastodon.MastodonClient;
 import io.github.bmarwell.social.metricbot.mastodon.MastodonStatus;
 import io.github.bmarwell.social.metricbot.web.factory.MastodonProducer;
-import jakarta.annotation.Resource;
-import jakarta.enterprise.concurrent.ManagedExecutorService;
-import jakarta.enterprise.concurrent.ManagedScheduledExecutorService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
 import jakarta.enterprise.event.Event;
 import jakarta.inject.Inject;
 import jakarta.servlet.ServletContextEvent;
+import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.servlet.ServletContextListener;
 import jakarta.servlet.annotation.WebListener;
 import java.util.List;
@@ -33,16 +33,21 @@ import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+// Vidocq port: @ApplicationScoped is REQUIRED here. On Open Liberty this class became a
+// bean through beans.xml bean-discovery-mode="all" (CDI Full). Vauban is CDI Lite, which
+// only recognises bean-defining annotations, so without this the class is not a bean and
+// Foy never registers the listener — the application silently does nothing.
+@ApplicationScoped
 @WebListener
 public class MastodonMentionListener implements ServletContextListener {
 
     private static final Logger LOG = LoggerFactory.getLogger(MastodonMentionListener.class);
 
-    @Resource
-    private ManagedScheduledExecutorService scheduler;
+    @Inject
+    ScheduledExecutorService scheduler;
 
-    @Resource
-    private ManagedExecutorService executor;
+    @Inject
+    ExecutorService executor;
 
     @Inject
     private MastodonProducer mastodonProducer;
@@ -81,9 +86,10 @@ public class MastodonMentionListener implements ServletContextListener {
     }
 
     protected void retrieveMentions() {
-        final var unused = executor.copy(this.mastodon.getRecentMentions())
+        // Vidocq port: copy() has no JDK equivalent; the executor now runs the dependent stage.
+        final var unused = this.mastodon.getRecentMentions()
                 // no method returning void?
-                .handle((List<MastodonStatus> result, Throwable error) -> {
+                .handleAsync((List<MastodonStatus> result, Throwable error) -> {
                     if (error != null) {
                         LOG.error("could not retrieve mentions: [" + error.getMessage() + "].", error);
                         return null;

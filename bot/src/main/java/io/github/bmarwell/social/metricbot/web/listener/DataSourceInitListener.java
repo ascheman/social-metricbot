@@ -18,9 +18,15 @@ package io.github.bmarwell.social.metricbot.web.listener;
 import io.github.bmarwell.social.metricbot.db.SocialMetricBotDataSource;
 import jakarta.inject.Inject;
 import jakarta.servlet.ServletContextEvent;
+import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.servlet.ServletContextListener;
 import jakarta.servlet.annotation.WebListener;
 
+// Vidocq port: @ApplicationScoped is REQUIRED here. On Open Liberty this class became a
+// bean through beans.xml bean-discovery-mode="all" (CDI Full). Vauban is CDI Lite, which
+// only recognises bean-defining annotations, so without this the class is not a bean and
+// Foy never registers the listener — the application silently does nothing.
+@ApplicationScoped
 @WebListener
 public class DataSourceInitListener implements ServletContextListener {
 

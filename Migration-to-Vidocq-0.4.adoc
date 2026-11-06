@@ -1,0 +1,679 @@
+= Migrating social-metricbot from Open Liberty to Vidocq 0.4.0-RC2
+:icons: font
+:toc: macro
+:toclevels: 3
+:vidocq-version: 0.4.0-RC2
+:rewrite-project: https://github.com/ascheman/rewrite-vidocq
+
+An experimental port of this application from https://openliberty.io/[Open Liberty] to the https://vidocq.dev/[Vidocq] runtime, done mechanically where that was possible and by hand where it was not.
+The mechanical part lives in a separate project, {rewrite-project}[ascheman/rewrite-vidocq], as a set of https://docs.openrewrite.org/[OpenRewrite] recipes.
+
+This document is the engineering report: what the recipes do, what had to be ported by hand, what broke on the way, and which of those breakages look like something the Vidocq project should know about.
+
+toc::[]
+
+== Summary
+
+The port works.
+All seven Maven modules build, the 122 existing tests pass unchanged except for three that needed a one-line adjustment, and the application starts on Vidocq {vidocq-version} and does its job.
+
+.Result
+[cols="1,3"]
+|===
+|Build |7/7 modules `SUCCESS`, 122 tests in 19 test classes, 0 failures, 0 errors
+|Startup |`Vidocq - Started in 763 ms`, `anomalies: none`
+|Readiness |`GET /api/health/ready` -> `HTTP 200 {"status":"UP","checks":[]}`
+|Database |Flyway applied 4 migrations, schema at `v4`
+|Application |5 `@WebListener` beans registered, both schedulers firing real HTTPS requests
+|Diagnostics |`vidocq:doctor` -- 13 checks, 10 ok, 3 warnings, 0 failed
+|===
+
+The strongest evidence is not the health check.
+With deliberately invalid credentials the scheduler fires, the listener runs, Cassini's REST client performs a real HTTPS request against Bluesky, and the JSON error body deserialises through Champollion:
+
+[source]
+----
+[BSKY] Login not successful. RC=401
+Body: >>{"error":"AuthenticationRequired","message":"Invalid identifier or password"}<<
+----
+
+That proves the whole chain end to end -- virtual-thread scheduler, CDI event, REST client, JSON-B, logging.
+Only the credentials are fake.
+
+[IMPORTANT]
+====
+Two things are *not* proven.
+There is no `module-info.java`, so the application runs on the *class path* rather than as a Java module, which is not the deployment model Vidocq prescribes.
+And no Jakarta Data read/write round trip was observed at runtime, because with invalid credentials the bot never gets a status worth persisting.
+Both are detailed in <<open-points>>.
+====
+
+=== How much of this was mechanical
+
+.Division of labour
+[cols="2,1,4"]
+|===
+|Area |Automated |Comment
+
+|Build: remove `liberty-maven-plugin`, import the Vidocq BOM, add extensions and spec libraries
+|yes
+|OpenRewrite, or `vidocq:add-extension` -- see <<tooling>>
+
+|Finding the APIs with no Vidocq equivalent
+|yes
+|`FindUnsupportedApis` reports them before the port starts
+
+|`server.xml` -> `vidocq.properties`
+|no
+|No mechanical equivalent; the values have to be understood
+
+|JPA -> Jakarta Data
+|no
+|A different programming model, not a renaming
+
+|Jakarta Concurrency -> virtual threads
+|no
+|A deliberate architectural decision
+
+|`war` -> executable application
+|no
+|Needs a `main` method and a packaging decision
+|===
+
+== What Vidocq is, in one paragraph
+
+Vidocq is a European Jakarta EE / MicroProfile runtime built on a very different premise from a traditional application server.
+There is no deployment unit and no server to deploy into: the application has a `main` method, calls `Vidocq.main(args)`, and the runtime is assembled from the extensions the application declares as ordinary Maven dependencies, discovered through the `ServiceLoader` and started in a fixed priority order.
+Dependency injection is CDI 4.1 *Lite*, implemented by Vauban as compile-time code generation with no runtime reflection, so the bean graph is validated while the application is compiled rather than when it is started.
+
+That premise is the source of nearly every finding in this report.
+A feature that a Jakarta EE server implements by scanning and reflecting at deployment time has to be either generated at compile time or not exist at all.
+
+== Approach
+
+. Fetch the project, build it unchanged on Open Liberty, and keep that build green as the reference.
+. Work in a dedicated worktree, `feature/vidocq-migration`, so the Liberty version stays available for comparison.
+. Write OpenRewrite recipes for everything mechanical, in a separate project, and run them against the reactor.
+. Port the rest by hand, guided by the recipes' own report of unsupported APIs.
+. Verify by building, by running the tests, and by starting the application and watching it work.
+
+=== The OpenRewrite recipes
+
+The recipes live in {rewrite-project}[ascheman/rewrite-vidocq] and are published under Vidocq's own triple license, `EPL-2.0 OR EUPL-1.2 OR GPL-2.0-or-later`, so the Vidocq project can adopt them as they are if it wants to.
+
+[NOTE]
+====
+That licensing is possible only because every recipe is original work.
+`org.openrewrite.recipe:rewrite-migrate-java` -- the obvious template, since it contains the Java EE to Jakarta EE migration -- is published under the *Moderne Source Available License*, which is not compatible with the licenses above.
+It can therefore not be used as a source to copy from.
+Only `openrewrite/rewrite` itself, `openrewrite/rewrite-third-party` and `quarkusio/quarkus-updates` are Apache-2.0 and safe as references; the project structure follows the last of those, without taking code from it.
+====
+
+Three recipes, split along the one axis that matters -- *spec libraries are a per-module concern, runtime extensions are a property of the deployment*:
+
+`io.vidocq.rewrite.openliberty.OpenLibertyToVidocq`::
+Removes the Liberty build, imports `vidocq-runtime-bom`, and adds the spec libraries each module actually uses, gated on type usage.
+Safe across a whole reactor.
+
+`io.vidocq.rewrite.openliberty.AddVidocqExtensionsForDeployable`::
+Adds the runtime core and the extension set corresponding to the `server.xml` feature list.
+Deliberately *without* type conditions, and to be run against the single deployable module only.
+
+`io.vidocq.rewrite.openliberty.FindUnsupportedApis`::
+Reports every use of an API that Vidocq {vidocq-version} has no equivalent for, so the manual work can be sized before it is begun.
+
+The first version of these recipes gated the runtime extensions on type usage as well, which looked tidy and was wrong: it pushed the REST *server* and the web server into modules that are REST *clients*.
+Running the recipes on a real multi-module project is what exposed that; a unit test on a synthetic pom would not have.
+
+[WARNING]
+====
+On a project that uses the Maven build cache extension, every OpenRewrite invocation needs `-Dmaven.build.cache.enabled=false`.
+With the cache active, `rewrite:run` and `rewrite:dryRun` report `BUILD SUCCESS` and silently change *nothing at all*.
+This is not an OpenRewrite defect, but it is indistinguishable from one, and it cost real debugging time.
+====
+
+[[tooling]]
+=== Tooling that was available and would have helped
+
+This is worth recording as a finding in its own right, because it is a discoverability problem rather than a technical one.
+Vidocq's own Maven plugin already covers a large part of what was done by hand here, and it was found only after the port was finished:
+
+[cols="1,3"]
+|===
+|Goal |What it does
+
+|`vidocq:doctor`
+|Checks JDK, wrapper, pom, `vidocq.properties`, extensions, codegen bundles, the Vauban indexer, `module-info.java` directives and the HTTP port, with a concrete fix hint per finding, and `-Dvidocq.doctor.fix` to apply them
+
+|`vidocq:add-extension`
+|Adds an extension *and* its codegen bundle on `annotationProcessorPaths` *and* its `module-info.java` directives -- that is, the three things that have to stay in sync and that were each a separate manual step here
+
+|`vidocq:list-extensions`
+|Lists the extensions the project runs with, transitive ones marked
+
+|`vidocq:run`
+|Runs the application once in a forked JVM, compiling and indexing first
+
+|`vidocq:dev`
+|Dev mode: watches sources, recompiles, restarts, and runs the tests on every change
+
+|`vidocq:package`, `vidocq:jlink`, `vidocq:jpackage`, `vidocq:docker`
+|Standalone ZIP distribution, custom runtime image, native installer, container image
+
+|`vidocq:check-module-info`, `vidocq:complete-module-info`
+|Verify that `module-info.java` carries the directives the extensions need, and add the missing `opens` directives
+|===
+
+`vidocq:doctor` in particular found a real defect in the finished port that neither the build nor the smoke test had noticed: the `foy-servlet` codegen bundle was missing from `annotationProcessorPaths`.
+The application started and worked regardless, which is exactly why a dedicated check matters.
+It is fixed in this branch, and doctor now reports `10 ok, 3 warnings, 0 failed`.
+
+[CAUTION]
+====
+Most of that chain is *unavailable to this port today*.
+`vidocq:run` declares `mainModule` as a required parameter -- "required -- Vidocq runs on the module path" -- and `vidocq:dev`, `vidocq:package`, `vidocq:jlink` and `vidocq:jpackage` build the same module path.
+Without a `module-info.java` the only way to start the application is the hand-built class path used in <<how-to>>.
+That makes the missing module descriptor much more than a style issue: it locks the application out of the entire official tool chain.
+====
+
+[TIP]
+====
+For the OpenRewrite recipes this reframes the division of labour.
+Adding extensions is better delegated to `vidocq:add-extension`, which also handles the codegen bundle and the module directives; OpenRewrite should concentrate on what that tool cannot do -- removing the *old* runtime's build, and reporting the APIs that have no equivalent.
+====
+
+== Feature mapping
+
+Liberty's `<featureManager>` list is the specification of what the runtime must provide.
+On Vidocq the same list becomes a set of Maven dependencies.
+
+.`server.xml` features and their Vidocq counterparts
+[cols="1,2,3"]
+|===
+|Liberty feature |Vidocq |Note
+
+|`restfulWS-3.1`
+|Cassini (`cassini-rest` extension) on Chappe (`chappe-webserver`)
+|Jakarta REST 4.0; the web server is a separate extension
+
+|`cdi-4.0`
+|Vauban (`vauban-indexer` plus the core codegen bundle)
+|CDI 4.1 *Lite*, not Full -- see <<f-cdi-lite>>
+
+|`servlet-6.0`
+|Foy (`foy-servlet` extension)
+|Servlet 6.1; registers `@WebListener`, so listener-driven bootstrap survives
+
+|`persistence-3.1`
+|Mansart (`mansart-data`, `mansart-pool`, `mansart-transactions`)
+|*Jakarta Data 1.0 over JDBC, not Jakarta Persistence* -- see <<f-data>>
+
+|`jsonb-3.0`
+|Champollion (`champollion-api`, `champollion-jsonb`)
+|JSON-P 2.1 / JSON-B 3.0
+
+|`mpConfig-3.0`
+|Ravel (`ravel-config` extension)
+|MicroProfile Config 3.1
+
+|`concurrent-3.0`
+|*nothing*
+|No Concurrency extension exists -- see <<f-concurrency>>
+
+|`jdbc-4.3` + `<library>` with the H2 jar
+|`vidocq-runtime-h2-module-repackaged` plus `mansart-data-dialect-h2`
+|Vidocq needs every dependency as a Java module, so it ships H2 repackaged
+
+|`localConnector-1.0`
+|--
+|Liberty-only tooling feature, dropped
+
+|-- (nothing in Liberty)
+|Knock (`knock-health` extension)
+|*Added*: MicroProfile Health, so that "has it started?" has a real answer
+|===
+
+Nine extensions in total, confirmed by `vidocq:list-extensions`.
+
+== The manual part
+
+[[f-data]]
+=== Data access: Jakarta Data, not Jakarta Persistence
+
+This is the single largest difference and the one most likely to surprise someone reading the feature table.
+Mansart is *not* a JPA provider.
+It implements *Jakarta Data 1.0 over JDBC*, with a compile-time generated repository implementation; there is no `EntityManager` anywhere in the Mansart source tree, no `persistence.xml` is read, and `AttributeConverter` does not exist.
+
+Consequences for this application:
+
+* `persistence.xml` was deleted.
+* The two `@Converter` classes, `InstantConverter` and `UriConverter`, were deleted.
+  Mansart cannot run them.
+* `BskyStatusPdo` now stores its two `URI` fields as `String`.
+  The `URI`-typed accessors were kept, so no caller had to change; the conversion moved into the repository facade.
+* `@PrePersist` was removed -- Jakarta Data has no JPA lifecycle callbacks.
+* The `EntityManager`-based repositories became two layers: a Jakarta Data interface per entity (`BskyStatusData`, `MastodonStatusData`, `@Repository` + `@Transactional`, extending `BasicRepository`), and the existing `*Repository` class as a thin facade keeping its original public signatures.
+  `find` became `findById`, `merge` became `save` (which already has upsert semantics, so the explicit find-then-insert-or-update branch disappeared), and `detach` was simply dropped, because Mansart hands back detached instances and there is no persistence context to evict from.
+
+[NOTE]
+====
+A new Flyway migration, `V4__timestamps-with-timezone.sql`, widens `TWEET_TIME`, `RESPONSE_TIME` and `POST_TIME` to `TIMESTAMP WITH TIME ZONE`.
+Mansart's `H2Dialect` binds an `Instant` as `TIMESTAMP_WITH_TIMEZONE`, which the original plain `TIMESTAMP` columns reject.
+This is a schema change, so it matters for anyone with an existing database.
+====
+
+Not keeping the facades would have been the wrong trade.
+The public surface of the data module is small, the bot module uses it in a dozen places, and keeping the signatures meant the diff stayed inside the `db` module where it belongs.
+
+[[f-concurrency]]
+=== Concurrency: Jakarta Concurrency does not exist on Vidocq
+
+Open Liberty supplied `ManagedExecutorService` and `ManagedScheduledExecutorService` from its own thread pools, injected with `@Resource`.
+Vidocq {vidocq-version} ships no Concurrency extension at all: there is none in `vidocq-runtime-bom`, and the package `jakarta.enterprise.concurrent` does not appear anywhere in the Vidocq source tree.
+
+The replacement is a small CDI producer, `BotExecutors`:
+
+* an `ExecutorService` from `Executors.newVirtualThreadPerTaskExecutor()` for the actual work, which is all I/O, and
+* a two-thread *platform*-thread `ScheduledExecutorService` whose only job is timing, because virtual threads should not be pooled and a `ScheduledThreadPoolExecutor` is a pool of long-lived threads.
+
+[WARNING]
+====
+A container-managed executor *propagates context* -- CDI scopes, transaction, security -- into the submitted task.
+Plain JDK executors do not.
+The scheduled tasks here fire CDI events whose observers are `@Transactional`, so a transaction is now started by the observer itself instead of being inherited from the caller.
+That is correct for this application, but it is a real semantic change rather than a mechanical substitution, and it is the one decision in this port that deserves a second opinion.
+====
+
+`ManagedExecutorService.copy(CompletableFuture)` has no `java.util.concurrent` equivalent whatsoever.
+The four call sites were rewritten to use the original future and pass the executor explicitly to the dependent stage:
+
+[source,java]
+----
+CompletableFuture<Optional<MastodonStatus>> handled = clientCopy
+        .postStatus(statusToSend)
+        .orTimeout(30, TimeUnit.SECONDS)
+        .handleAsync(MastodonResponder::resultOrLog, executor);
+----
+
+=== `@Resource`: no resource injection at all
+
+`@Resource` is the Java EE way to inject a container-managed object identified by a *name* rather than by a type -- a JNDI lookup written as a field declaration, resolved by the container at deployment time.
+It is how Liberty handed this application both its `DataSource` (`jdbc/metricbotjpadatasource`, declared in `server.xml`) and its managed executors.
+
+Vidocq has no `jakarta.annotation.Resource` support anywhere.
+It does not fit the model: resolving a name against a registry at deployment time is exactly the runtime reflection that Vauban is built to avoid, and the thing being looked up is instead contributed by an extension as a CDI bean.
+
+[NOTE]
+====
+`vidocq-runtime-naming-extension` gives a *programmatic* `InitialContext` lookup a chance of resolving.
+It does not make `@Resource` injection work.
+====
+
+The `DataSource` is now injected, and the executors come from `BotExecutors`.
+That the annotation is absent is arguably a *better* diagnostic than a half-working implementation would be: the compiler points at every site that needs a decision.
+
+=== Configuration: `server.xml` becomes `vidocq.properties`
+
+`<httpEndpoint>`, `<dataSource>`, `<jdbcDriver>` and `<library>` become eight properties.
+MicroProfile Config supplies the override mechanism, so `vidocq.pool.url` can still be set per environment.
+
+[source,properties]
+----
+vidocq.http.host=0.0.0.0
+vidocq.http.port=8080
+
+vidocq.http.mount.api.path=/api
+vidocq.http.mount.api.type=restful
+
+vidocq.pool.url=jdbc:h2:mem:metricbot;DB_CLOSE_DELAY=-1
+vidocq.pool.username=sa
+vidocq.pool.maxSize=8
+vidocq.pool.acquireTimeout=PT5S
+----
+
+`server.xml`, `bootstrap.properties`, `jvm.options`, `src/main/liberty/` and the whole `app/openliberty/` Docker module were deleted.
+Vidocq's own `vidocq:docker` goal is the replacement for the last of those, and it was not exercised here.
+
+=== Packaging: `war` becomes an ordinary application
+
+The `bot` module is now `<packaging>jar</packaging>` with a `main` method:
+
+[source,java]
+----
+public static void main(final String[] args) {
+    Vidocq.main(args);
+}
+----
+
+`beans.xml` moved from `src/main/webapp/WEB-INF/` to `src/main/resources/META-INF/`, and `src/main/webapp/` was deleted.
+There is no servlet container to deploy into, so the REST resources are mounted by configuration (`vidocq.http.mount.api.*`) instead of by a context root.
+
+[[f-cdi-lite]]
+=== CDI Lite: `beans.xml` is not enough
+
+The application's five `@WebListener` classes carry no scope annotation.
+On Liberty they became beans because `beans.xml` declared `bean-discovery-mode="all"`.
+CDI *Lite* has no such mode -- there is no deployment-time scan to configure -- so under Vauban those classes were simply not beans.
+
+The result was the worst failure mode of the whole port.
+The application started perfectly, reported `anomalies: none`, served health checks, and *did nothing at all*: no Flyway migration, no polling, no listeners.
+Foy registered zero application listeners and said so in a line that is easy to read past.
+Adding `@ApplicationScoped` to all five fixed it.
+
+=== Dependency scopes, and CDI 4.1
+
+Two build-level changes that are easy to miss and fatal if missed:
+
+. The specification APIs were `provided`, because Liberty supplied them.
+  A Vidocq application is a plain Java program and must *ship* them, so they became compile scope.
+. `jakarta.enterprise.cdi-api` had to go from 4.0.1 to *4.1.0*.
+  Vauban's build-compatible-extension processor loads `jakarta.enterprise.inject.build.compatible.spi.InvokerFactory`, which only exists in 4.1, and on 4.0.1 the container dies at startup with `NoClassDefFoundError`.
+
+=== Tests
+
+All 122 tests pass.
+Three needed a one-line change, and the reason is worth knowing before anyone else runs into it.
+
+Vauban weaves a `protected <Bean>(io.vidocq.vauban.api.ProxyLink)` constructor into every bean at compile time.
+Mockito's `@InjectMocks` tries constructor injection first and picks the *largest* constructor, so it built each object with a `null` `ProxyLink` and then skipped field injection entirely -- every `@Mock` stayed `null`.
+The fix is to pre-initialise the field, which forces Mockito onto field injection:
+
+[source,java]
+----
+@InjectMocks
+MastodonProducer producer = new MastodonProducer();
+----
+
+One of the three tests had not been touched by this migration at all, which is the point: *any* project with Mockito field-injection tests will see this the moment it moves to Vauban.
+
+== Findings
+
+Collected in the order they were hit, with a judgement on each.
+"Gap" means Vidocq does not have the feature, which may be entirely intentional; "trap" means it does, but the failure mode is misleading.
+
+[[f-1]]
+=== Mansart is Jakarta Data, not Jakarta Persistence
+
+*Classification*: gap, almost certainly deliberate -- profile boundary.
+
+Easy to get wrong when reading the feature list, because `persistence-3.1` looks like it maps onto something called "Mansart data".
+It does not: there is no `EntityManager`, no `persistence.xml`, no `AttributeConverter`.
+Any application whose data layer is JPA has a port, not a configuration change, ahead of it.
+See <<f-data>>.
+
+[[f-2]]
+=== No Jakarta Concurrency
+
+*Classification*: gap -- Core Profile boundary.
+
+Jakarta Concurrency is part of the Web Profile and Platform, not of the Core Profile, so its absence is consistent.
+It still has the largest architectural consequence of anything in this port, because `ManagedExecutorService.copy()` has no equivalent and context propagation is lost.
+See <<f-concurrency>>.
+
+[[f-3]]
+=== No `@Resource`
+
+*Classification*: gap, by design.
+
+Name-based injection resolved at deployment time is incompatible with compile-time DI.
+Worth stating explicitly in the migration documentation, because `@Resource` is extremely common in Liberty and WildFly applications.
+
+[[f-4]]
+=== CDI Lite silently ignores `bean-discovery-mode="all"`
+
+*Classification*: *trap*, and the most dangerous finding of the port.
+
+A `beans.xml` with `bean-discovery-mode="all"` is accepted, the build is green, the application starts, and classes that were beans on Liberty are quietly not beans any more.
+Nothing fails -- the application simply does nothing.
+A warning when a `beans.xml` declares a discovery mode that CDI Lite cannot honour would turn an afternoon of confusion into a one-line fix.
+
+[[f-5]]
+=== Vauban's woven constructor breaks Mockito `@InjectMocks`
+
+*Classification*: trap, with ecosystem-wide reach.
+
+Every bean gets a `protected <Bean>(ProxyLink)` constructor, Mockito prefers the largest constructor, and field injection is then skipped -- all mocks are `null`.
+It will hit every migrating project that uses Mockito field injection, including tests that have nothing to do with the migration.
+A note in the Vauban documentation, or a Mockito-friendly ordering of the woven constructor, would save everyone the diagnosis.
+
+[[f-6]]
+=== CDI 4.1 is required, and 4.0 fails late
+
+*Classification*: trap.
+
+Vauban loads `jakarta.enterprise.inject.build.compatible.spi.InvokerFactory`, which exists only in CDI 4.1.
+With `jakarta.enterprise.cdi-api` 4.0.1 on the path, the build succeeds and the container dies at startup with `NoClassDefFoundError`.
+An enforcer rule or a compile-time check would catch it where it belongs.
+
+[[f-7]]
+=== `provided` scope has to become compile scope -- and the build does not notice
+
+*Classification*: trap, and the one defect found latest in this port.
+
+Liberty supplied the specification APIs, so they are `provided` -- correct for the library modules of a reactor, and still correct after the migration.
+The *deployable* module must ship them instead, which means an explicit `<scope>compile</scope>` that overrides the root pom's management.
+Without it everything compiles, all 122 tests pass, `vidocq:doctor` is happy, and the application dies with `NoClassDefFoundError: jakarta/enterprise/inject/spi/BeanManager` -- but only when started from a *runtime*-scope class path.
+Started from a class path that happens to include `provided` artifacts, as an IDE or a naive `dependency:build-classpath` does, it works, which is how this survived unnoticed until the run command was written down for this report.
+
+[[f-8]]
+=== EclipseLink's metamodel generator collides with Mansart's
+
+*Classification*: trap, unavoidable by either side.
+
+Both generate a canonical metamodel named `X_`, so the compiler fails with `FilerException: Attempt to recreate a file for type ...Pdo_`.
+Every JPA project will have `org.eclipse.persistence.jpa.modelgen.processor` on `annotationProcessorPaths` and must remove it.
+A good candidate for an OpenRewrite recipe.
+
+[[f-9]]
+=== Beans contributed at runtime need `Instance<>`
+
+*Classification*: documented behaviour, poor ergonomics.
+
+Vauban validates injection points at compile time, but the `DataSource` from `mansart-pool` and the generated Mansart repositories are registered at runtime through Mansart's own SPI (`_MansartComponents`), not through Vauban's compile-time index.
+A direct `@Inject DataSource` therefore fails the *build* with "Unsatisfied dependency".
+The workaround is deferred lookup, which is what Vidocq's own petstore example does:
+
+[source,java]
+----
+@Inject
+Instance<DataSource> dataSourceInstance;
+----
+
+It works, but it pushes a runtime concern into the application's source code, and the error message does not hint at the solution.
+
+[[f-10]]
+=== Cross-module synthetic beans fail compile-time validation
+
+*Classification*: *bug candidate* -- the clearest one in this report.
+
+Ravel's build-compatible extension creates synthetic beans for `@ConfigProperty` injection points while the `common` module is compiled, and `common`'s jar does publish them in `META-INF/vauban-synthetic-metadata.properties`.
+That file is read by the *container at runtime* but not by the *compile-time validator of a consuming module*, so building `bot` reports the configuration fields of `common`'s beans as unsatisfied.
+
+The escape hatch is Vauban's documented `-Avauban.validation=false`, which silences the static check only -- the container still validates the whole graph at startup, which the smoke test exercises.
+That is acceptable as a workaround but wrong as an end state: a multi-module application loses compile-time validation of its *entire* bean graph because of one cross-module synthetic bean.
+Having the validator read the published metadata of dependency jars would fix it.
+
+[[f-11]]
+=== `ScheduledExecutorService` is an `ExecutorService`
+
+*Classification*: CDI subtlety, worth documenting once.
+
+Producing both from one bean gives "Ambiguous dependency" (fixed with `@Typed(ScheduledExecutorService.class)`), and a `@Disposes` method for either type matches both producers, giving "Multiple disposer methods for producer".
+Owning both executors as fields of an `@ApplicationScoped` bean and shutting them down in `@PreDestroy` avoids the second problem entirely.
+
+[[f-12]]
+=== `Instant` needs `TIMESTAMP WITH TIME ZONE`
+
+*Classification*: expected consequence of a different persistence stack.
+
+Mansart's `H2Dialect` binds an `Instant` as `TIMESTAMP_WITH_TIMEZONE`, which plain `TIMESTAMP` columns written by a JPA provider reject.
+Migrating an existing schema is therefore part of migrating the runtime.
+
+[[f-13]]
+=== Two spellings for the HTTP port, and `doctor` only sees one
+
+*Classification*: minor inconsistency.
+
+`vidocq.http.port` is an alias for `vidocq.chappe.listener.default.port`.
+Both work; `vidocq create` scaffolds the alias and `vidocq:doctor` checks only the alias, so the alias is the one to use.
+`doctor`'s port check also reads only `vidocq.properties`, so `-Dvidocq.http.port=18080` on the command line still produces a warning about the port in the file.
+
+[[f-14]]
+=== A missing codegen bundle is invisible until `vidocq:doctor`
+
+*Classification*: trap, with an excellent remedy that is easy to miss.
+
+The `foy-servlet` codegen bundle was absent from `annotationProcessorPaths` for the whole port.
+Build green, tests green, application working, `anomalies: none` -- and `vidocq:doctor` flags it immediately with the exact fix.
+This is a strong argument for putting `vidocq:doctor` in front of every migration, and for making it part of CI.
+
+=== One worry that turned out to be unfounded
+
+Compile-time DI with no reflection sounds incompatible with `@Inject private` fields, of which this application has 26.
+It is not: Vauban generates a `_VaubanComponents$PrivateFields0` holder and injects them.
+No source change was needed anywhere for field visibility.
+
+== Suggestions for the Vidocq project
+
+In rough order of value, from the perspective of someone migrating an existing application:
+
+. Make the compile-time validator read `META-INF/vauban-synthetic-metadata.properties` from dependency jars (<<f-10>>).
+  Today the only remedy is to disable validation for the whole module.
+. Warn when a `beans.xml` requests a discovery mode CDI Lite cannot honour (<<f-4>>).
+  This is the difference between a one-line fix and an afternoon.
+. Document the Mockito interaction, or order the woven constructor so Mockito does not choose it (<<f-5>>).
+. Fail the build, rather than the startup, when the CDI API on the path is older than 4.1 (<<f-6>>).
+. Add a `doctor` check for specification APIs left in `provided` scope in the deployable module (<<f-7>>).
+  It is invisible, it survives a green build and a green test run, and it is fatal.
+. Put `vidocq:doctor`, `vidocq:add-extension` and `vidocq:run` in front of the migration documentation (<<tooling>>).
+  They cover a surprising amount of what is otherwise manual work, and they were found here only after the fact.
+. Consider a short "coming from Open Liberty / WildFly" page stating the three structural gaps up front: no `@Resource`, no Jakarta Concurrency, Jakarta Data instead of Jakarta Persistence.
+
+[[open-points]]
+== Open points
+
+What this port does *not* yet do:
+
+* *No `module-info.java`.*
+  The application runs on the class path.
+  Vidocq's startup report labels every extension `class path`, so it is supported, but it is not the prescribed deployment model, and more importantly it locks the application out of `vidocq:run`, `vidocq:dev`, `vidocq:package`, `vidocq:jlink` and `vidocq:jpackage`, all of which require a `mainModule`.
+  `vidocq:complete-module-info` exists to generate the required `opens` directives once the descriptors are there, so the obvious next step is: write six `module-info.java` files, run that goal, then start the application with `vidocq:run`.
+* *No persistence round trip observed at runtime.*
+  The schema is created and migrated, and the repositories compile and are injected, but with invalid credentials the bot never receives a status worth storing.
+  A small integration test against the Jakarta Data repositories would close this.
+* *No container image.*
+  `app/openliberty/` was deleted; `vidocq:docker` is the replacement and has not been tried.
+* *The CI workflows were not touched.*
+  They run plain Maven and should still work, but nothing verifies that on this branch yet.
+* *Context propagation* is gone, as described in <<f-concurrency>>, and that decision deserves a review by someone who knows the application's intent.
+
+=== One pre-existing bug, deliberately left alone
+
+[source,java]
+----
+public Optional<URI> getBotResponseAtUri() {
+    return Optional.ofNullable(this.botResponseAtUri)
+            .map(URI::create)
+            .filter(uri -> uri.equals(EMPTY_URI));
+}
+----
+
+The filter keeps the value only when it *is* the empty URI, which is almost certainly inverted.
+It is unrelated to the migration and was preserved verbatim, because silently changing behaviour in the middle of a port makes the port impossible to evaluate.
+It should be fixed separately, on `main`.
+
+[[how-to]]
+== How to build, run and verify
+
+[source,bash]
+----
+# build everything
+./mvnw clean install
+
+# check the project the way Vidocq itself does
+./mvnw -pl bot vidocq:doctor
+./mvnw -pl bot vidocq:list-extensions
+----
+
+Starting the application needs a hand-built class path for as long as there is no `module-info.java`.
+Note `-DincludeScope=runtime`: anything wider hides scope mistakes like <<f-7>>.
+
+[source,bash]
+----
+./mvnw -pl bot dependency:build-classpath \
+  -Dmdep.outputFile=target/cp.txt -DincludeScope=runtime
+
+java -cp "bot/target/classes:$(cat bot/target/cp.txt)" \
+  -Dvidocq.http.port=18080 \
+  -Dio.github.bmarwell.social.metricbot.bsky.handle=... \
+  -Dio.github.bmarwell.social.metricbot.bsky.appSecret=... \
+  -Dio.github.bmarwell.social.metricbot.mastodon.accountName=... \
+  -Dio.github.bmarwell.social.metricbot.mastodon.instanceHostname=... \
+  -Dio.github.bmarwell.social.metricbot.mastodon.accessToken=... \
+  io.github.bmarwell.social.metricbot.web.MetricBotApp
+----
+
+=== How to tell that it started completely
+
+This was the original question, and log grepping is the wrong answer.
+The `knock-health` extension was added precisely so there is a real one:
+
+[source,bash]
+----
+curl -s http://localhost:18080/api/health/started
+curl -s http://localhost:18080/api/health/ready
+curl -s http://localhost:18080/api/health/live
+----
+
+All three return `{"status":"UP"}` with `HTTP 200`.
+Vidocq additionally prints a startup report listing phases, extensions, routes and pool configuration, ending in `anomalies: none`, which is a far better diagnostic than any log pattern.
+In CI this belongs in an integration test; Vidocq ships `vidocq-runtime-junit` and `vidocq-runtime-arquillian` for that.
+
+[NOTE]
+====
+A readiness probe is necessary but not sufficient.
+It was `HTTP 200` while the application was doing nothing at all, because the listeners were not beans (<<f-4>>).
+What actually proves the application is alive is observed *work*: a scheduler firing, an outbound request, a response being parsed.
+====
+
+== Provenance and licensing
+
+This branch is a derivative of `bmarwell/social-metricbot`, which is Apache-2.0, and stays Apache-2.0.
+
+The OpenRewrite recipes are a separate project, {rewrite-project}[ascheman/rewrite-vidocq], published under Vidocq's triple license `EPL-2.0 OR EUPL-1.2 OR GPL-2.0-or-later` so that the Vidocq project can adopt them directly.
+They contain no code derived from `rewrite-migrate-java` or any other module under the Moderne Source Available License; see that project's `NOTICE` for the reasoning.
+
+The port and this report were produced with AI assistance (Claude Code), reviewed and verified by running the build and the application.
+Every finding above was observed on this machine, not inferred.
+
+== Appendix: startup evidence
+
+[source]
+----
+$ curl -s -w " [HTTP %{http_code}]" http://localhost:18080/api/health/ready
+{"status":"UP","checks":[]} [HTTP 200]
+
+Vidocq - Started in 770.916 ms (process running for 833 ms)
+anomalies     none
+
+o.f.core.internal.command.DbMigrate - Successfully applied 4 migrations
+    to schema "PUBLIC", now at version v4 (execution time 00:00.009s)
+
+i.g.b.s.m.bsky.DefaultBlueSkyClient - [BSKY] Login not successful. RC=401
+Body: >>{"error":"AuthenticationRequired","message":"Invalid identifier or password"}<<
+----
+
+[source]
+----
+$ ./mvnw -pl bot vidocq:doctor
+✔ Java version      Java 25.0.4
+✔ Vidocq project    pom.xml references the Vidocq runtime
+✔ Config            vidocq.properties — 8 keys, all recognized
+✔ Extensions        9 extensions in the runtime dependencies
+✔ Codegen bundles   5 wired, one per extension that ships one
+✔ Vauban indexer    vidocq-runtime-core-codegen on the processor path
+✔ Dependency codegen vidocq:generate declared in the pom
+⚠ Module directives no src/main/java/module-info.java
+✔ Dev services      1 wired for vidocq dev, vidocq test and mvn test
+  13 checks — 10 ok, 3 warning(s), 0 failed
+----

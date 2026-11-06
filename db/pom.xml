@@ -14,8 +14,40 @@
 
   <dependencies>
     <dependency>
+      <groupId>io.vidocq.vauban</groupId>
+      <artifactId>vauban-indexer</artifactId>
+      <version>${vidocq.version}</version>
+    </dependency>
+    <dependency>
       <groupId>jakarta.enterprise</groupId>
       <artifactId>jakarta.enterprise.cdi-api</artifactId>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>jakarta.data</groupId>
+      <artifactId>jakarta.data-api</artifactId>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>jakarta.inject</groupId>
+      <artifactId>jakarta.inject-api</artifactId>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.runtime.extensions.jakartaee.web</groupId>
+      <artifactId>vidocq-runtime-mansart-data-extension</artifactId>
+      <scope>provided</scope>
+    </dependency>
+    <!-- Vauban validates injection points at COMPILE time, so the module that injects the
+         DataSource must see the producer. mansart-pool publishes it as @Default DataSource. -->
+    <dependency>
+      <groupId>io.vidocq.runtime.extensions.jakartaee.web</groupId>
+      <artifactId>vidocq-runtime-mansart-pool-extension</artifactId>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.runtime.extensions.jakartaee.web</groupId>
+      <artifactId>vidocq-runtime-mansart-transactions-extension</artifactId>
       <scope>provided</scope>
     </dependency>
     <dependency>
@@ -54,16 +86,32 @@
         <configuration>
           <annotationProcessorPaths combine.children="append">
             <path>
-              <groupId>org.eclipse.persistence</groupId>
-              <artifactId>org.eclipse.persistence.jpa.modelgen.processor</artifactId>
-              <version>${dependency.eclipselink.version}</version>
+              <groupId>io.vidocq.runtime</groupId>
+              <artifactId>vidocq-runtime-core-codegen</artifactId>
+              <version>${vidocq.version}</version>
+              <type>pom</type>
+            </path>
+            <path>
+              <groupId>io.vidocq.runtime.extensions.jakartaee.web</groupId>
+              <artifactId>vidocq-runtime-mansart-data-extension-codegen</artifactId>
+              <version>${vidocq.version}</version>
+              <type>pom</type>
+            </path>
+            <path>
+              <groupId>io.vidocq.runtime.extensions.jakartaee.web</groupId>
+              <artifactId>vidocq-runtime-mansart-transactions-extension-codegen</artifactId>
+              <version>${vidocq.version}</version>
+              <type>pom</type>
             </path>
           </annotationProcessorPaths>
-          <compilerArgs combine.children="append">
-            <arg>-Aopenjpa.log=INFO</arg>
-          </compilerArgs>
         </configuration>
       </plugin>
+
+      <!-- Vidocq port: EclipseLink's jpa.modelgen.processor is gone.
+           It generated the JPA canonical metamodel (MastodonStatusPdo_), and Mansart's own
+           processor generates a metamodel under the SAME name, so having both on the processor
+           path fails the build with "Attempt to recreate a file for type ...Pdo_".
+           With no JPA provider left there is nothing for EclipseLink's modelgen to serve. -->
     </plugins>
   </build>
 

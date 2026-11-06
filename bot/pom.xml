@@ -10,26 +10,17 @@
 
   <artifactId>social-metricbot-app</artifactId>
   <version>1.0.0-SNAPSHOT</version>
-  <packaging>war</packaging>
-  <name>Social-MetricBot :: war</name>
+  <packaging>jar</packaging>
+  <name>Social-MetricBot :: app</name>
 
   <properties>
-    <!-- generic -->
-    <liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_H2_DB>${env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_H2_DB}</liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_H2_DB>
-    <!-- mastodon -->
-    <liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_MASTODON_ACCOUNTNAME>${env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_MASTODON_ACCOUNTNAME}</liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_MASTODON_ACCOUNTNAME>
-    <liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_MASTODON_INSTANCEHOSTNAME>${env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_MASTODON_INSTANCEHOSTNAME}</liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_MASTODON_INSTANCEHOSTNAME>
-    <liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_MASTODON_WEBSITE>${env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_MASTODON_WEBSITE}</liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_MASTODON_WEBSITE>
-    <liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_MASTODON_CLIENTID>${env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_MASTODON_CLIENTID}</liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_MASTODON_CLIENTID>
-    <liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_MASTODON_CLIENTSECRET>${env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_MASTODON_CLIENTSECRET}</liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_MASTODON_CLIENTSECRET>
-    <!-- bsky -->
-    <liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_BSKY_HANDLE>${env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_BSKY_HANDLE}</liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_BSKY_HANDLE>
-    <liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_BSKY_APPSECRET>${env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_BSKY_APPSECRET}</liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_BSKY_APPSECRET>
-    <liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_BSKY_SKIP_OLD_POSTS>${env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_BSKY_SKIP_OLD_POSTS}</liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_BSKY_SKIP_OLD_POSTS>
-    <liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_BSKY_SKIPOLDPOSTS>${env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_BSKY_SKIPOLDPOSTS}</liberty.env.IO_GITHUB_BMARWELL_SOCIAL_METRICBOT_BSKY_SKIPOLDPOSTS>
+    <!-- Vidocq port: the liberty.env.* pass-through is gone. The very same environment
+         variables are now read by Ravel (MicroProfile Config) at runtime. -->
   </properties>
 
   <dependencies>
+    <!-- Vidocq port: the spec APIs are NOT `provided` any more. Open Liberty supplied them
+         from the server; a Vidocq application is a plain Java program and must ship them. -->
     <!-- own dependencies -->
     <dependency>
       <groupId>io.github.bmarwell.social.metricbot</groupId>
@@ -49,6 +40,59 @@
       <version>1.0.0-SNAPSHOT</version>
     </dependency>
     <dependency>
+      <groupId>io.vidocq.champollion</groupId>
+      <artifactId>champollion-api</artifactId>
+      <version>${vidocq.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.runtime</groupId>
+      <artifactId>vidocq-runtime-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.runtime.extensions.essentials</groupId>
+      <artifactId>vidocq-runtime-chappe-webserver-extension</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.runtime.extensions.jakartaee.core</groupId>
+      <artifactId>vidocq-runtime-cassini-rest-extension</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.runtime.extensions.jakartaee.web</groupId>
+      <artifactId>vidocq-runtime-foy-servlet-extension</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.runtime.extensions.jakartaee.web</groupId>
+      <artifactId>vidocq-runtime-mansart-data-extension</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.runtime.extensions.jakartaee.web</groupId>
+      <artifactId>vidocq-runtime-mansart-pool-extension</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.runtime.extensions.jakartaee.web</groupId>
+      <artifactId>vidocq-runtime-mansart-transactions-extension</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.runtime.extensions.jakartaee.web</groupId>
+      <artifactId>vidocq-runtime-naming-extension</artifactId>
+    </dependency>
+    <!-- Vidocq port: added for the migration, not present on Open Liberty. Knock exposes the
+         MicroProfile Health endpoints, which is how "the application started completely" is
+         verified: a readiness probe is a far better signal than grepping the log. -->
+    <dependency>
+      <groupId>io.vidocq.runtime.extensions.microprofile</groupId>
+      <artifactId>vidocq-runtime-knock-health-extension</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.runtime.extensions.microprofile</groupId>
+      <artifactId>vidocq-runtime-ravel-config-extension</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.vauban</groupId>
+      <artifactId>vauban-indexer</artifactId>
+      <version>${vidocq.version}</version>
+    </dependency>
+    <dependency>
       <groupId>io.github.bmarwell.social.metricbot</groupId>
       <artifactId>social-metricbot-bsky-client</artifactId>
       <version>1.0.0-SNAPSHOT</version>
@@ -66,6 +110,23 @@
       <artifactId>h2</artifactId>
       <scope>runtime</scope>
     </dependency>
+    <dependency>
+      <groupId>io.vidocq.champollion</groupId>
+      <artifactId>champollion-jsonb</artifactId>
+      <version>${vidocq.version}</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.mansart</groupId>
+      <artifactId>mansart-data-dialect-h2</artifactId>
+      <version>${vidocq.version}</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.runtime.extensions.module.repackaged</groupId>
+      <artifactId>vidocq-runtime-h2-module-repackaged</artifactId>
+      <scope>runtime</scope>
+    </dependency>
 
     <dependency>
       <groupId>ch.qos.logback</groupId>
@@ -73,61 +134,93 @@
       <scope>runtime</scope>
     </dependency>
 
-    <!-- EE and MIP APIs -->
+    <!-- EE and MIP APIs.
+
+         Vidocq port: every one of these carries an EXPLICIT compile scope.
+
+         The root pom manages them with `provided`, which is right for a library module: on
+         Open Liberty the container supplied the APIs, and the library modules of this reactor
+         still declare them `provided` for that reason. A Vidocq application is a plain Java
+         program with a main method — nothing supplies anything — so the deployable module has
+         to SHIP them. Without the explicit scope here they stay `provided`, the build and the
+         tests still pass, and the application dies at startup with
+         NoClassDefFoundError: jakarta/enterprise/inject/spi/BeanManager. -->
     <dependency>
       <groupId>jakarta.servlet</groupId>
       <artifactId>jakarta.servlet-api</artifactId>
-      <scope>provided</scope>
+      <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>jakarta.enterprise</groupId>
       <artifactId>jakarta.enterprise.cdi-api</artifactId>
-      <scope>provided</scope>
+      <scope>compile</scope>
+    </dependency>
+    <!-- Pulled in by cdi-api, but managed as `provided` in the root pom, so they need the
+         same treatment: CDI fails at runtime without them. -->
+    <dependency>
+      <groupId>jakarta.el</groupId>
+      <artifactId>jakarta.el-api</artifactId>
+      <scope>compile</scope>
+    </dependency>
+    <dependency>
+      <groupId>jakarta.interceptor</groupId>
+      <artifactId>jakarta.interceptor-api</artifactId>
+      <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>jakarta.ws.rs</groupId>
       <artifactId>jakarta.ws.rs-api</artifactId>
       <version>${dependency.jaxrs-api.version}</version>
-      <scope>provided</scope>
+      <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>jakarta.json</groupId>
       <artifactId>jakarta.json-api</artifactId>
       <version>${dependency.jakarta.json-api.version}</version>
-      <scope>provided</scope>
+      <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>jakarta.json.bind</groupId>
       <artifactId>jakarta.json.bind-api</artifactId>
       <version>${dependency.jakarta.json.bind-api.version}</version>
-      <scope>provided</scope>
+      <scope>compile</scope>
     </dependency>
-    <dependency>
-      <groupId>jakarta.enterprise.concurrent</groupId>
-      <artifactId>jakarta.enterprise.concurrent-api</artifactId>
-      <version>${dependency.jakarta.concurrent-api.version}</version>
-      <scope>provided</scope>
-    </dependency>
+    <!-- Vidocq port: jakarta.enterprise.concurrent-api removed. Vidocq ships no Jakarta
+         Concurrency implementation, and no source references the API any more — the managed
+         executors were replaced by BotExecutors (virtual threads). -->
     <dependency>
       <groupId>jakarta.transaction</groupId>
       <artifactId>jakarta.transaction-api</artifactId>
-      <scope>provided</scope>
+      <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>org.eclipse.microprofile.config</groupId>
       <artifactId>microprofile-config-api</artifactId>
-      <scope>provided</scope>
+      <scope>compile</scope>
     </dependency>
 
     <dependency>
       <groupId>jakarta.annotation</groupId>
       <artifactId>jakarta.annotation-api</artifactId>
-      <scope>provided</scope>
+      <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>jakarta.inject</groupId>
       <artifactId>jakarta.inject-api</artifactId>
-      <scope>provided</scope>
+      <scope>compile</scope>
+    </dependency>
+    <!-- Vidocq port: the data and persistence APIs are used by the db module's repositories and
+         Pdos. Mansart implements Jakarta Data over JDBC but reads the Jakarta Persistence
+         annotations, so both APIs have to be on the application's own path. -->
+    <dependency>
+      <groupId>jakarta.data</groupId>
+      <artifactId>jakarta.data-api</artifactId>
+      <scope>compile</scope>
+    </dependency>
+    <dependency>
+      <groupId>jakarta.persistence</groupId>
+      <artifactId>jakarta.persistence-api</artifactId>
+      <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>org.apache.johnzon</groupId>
@@ -139,23 +232,76 @@
   <build>
     <plugins>
       <plugin>
-        <groupId>io.openliberty.tools</groupId>
-        <artifactId>liberty-maven-plugin</artifactId>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
         <configuration>
-          <copyDependencies>
-            <dependencyGroup>
-              <!-- Relative to server config directory -->
-              <location>h2</location>
-              <dependency>
-                <groupId>com.h2database</groupId>
-                <artifactId>h2</artifactId>
-                <version>${dependency.h2.version}</version>
-              </dependency>
-            </dependencyGroup>
-          </copyDependencies>
+          <!-- One codegen bundle per vidocq-runtime-<X>-extension this module depends on. -->
+          <annotationProcessorPaths combine.children="append">
+            <path>
+              <groupId>io.vidocq.runtime</groupId>
+              <artifactId>vidocq-runtime-core-codegen</artifactId>
+              <version>${vidocq.version}</version>
+              <type>pom</type>
+            </path>
+            <path>
+              <groupId>io.vidocq.runtime.extensions.jakartaee.core</groupId>
+              <artifactId>vidocq-runtime-cassini-rest-extension-codegen</artifactId>
+              <version>${vidocq.version}</version>
+              <type>pom</type>
+            </path>
+            <path>
+              <groupId>io.vidocq.runtime.extensions.jakartaee.web</groupId>
+              <artifactId>vidocq-runtime-foy-servlet-extension-codegen</artifactId>
+              <version>${vidocq.version}</version>
+              <type>pom</type>
+            </path>
+            <path>
+              <groupId>io.vidocq.runtime.extensions.jakartaee.web</groupId>
+              <artifactId>vidocq-runtime-mansart-data-extension-codegen</artifactId>
+              <version>${vidocq.version}</version>
+              <type>pom</type>
+            </path>
+            <path>
+              <groupId>io.vidocq.runtime.extensions.jakartaee.web</groupId>
+              <artifactId>vidocq-runtime-mansart-transactions-extension-codegen</artifactId>
+              <version>${vidocq.version}</version>
+              <type>pom</type>
+            </path>
+            <path>
+              <groupId>io.vidocq.runtime.extensions.microprofile</groupId>
+              <artifactId>vidocq-runtime-ravel-config-extension-codegen</artifactId>
+              <version>${vidocq.version}</version>
+              <type>pom</type>
+            </path>
+          </annotationProcessorPaths>
+          <compilerArgs combine.children="append">
+            <!-- Vidocq port: silence Vauban's COMPILE-TIME deployment validation for this module.
+                 The @ConfigProperty injection points live in the `common` module. Ravel's Build
+                 Compatible Extension creates the matching synthetic beans while `common` is
+                 compiled, and common's jar does publish them in
+                 META-INF/vauban-synthetic-metadata.properties — but that file is only consumed by
+                 the container at runtime, not by the compile-time validator of a consuming module.
+                 So building `bot` reports the config fields of common's beans as unsatisfied.
+                 This option is Vauban's documented escape hatch for synthetic-bean sources; it
+                 silences the static check only. The container still validates the full graph at
+                 startup, which is what the smoke test below actually exercises. -->
+            <arg>-Avauban.validation=false</arg>
+          </compilerArgs>
         </configuration>
       </plugin>
-
+      <plugin>
+        <groupId>io.vidocq.runtime</groupId>
+        <artifactId>vidocq-runtime-maven-plugin</artifactId>
+        <version>${vidocq.version}</version>
+        <executions>
+          <execution>
+            <id>generate</id>
+            <goals>
+              <goal>generate</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
     </plugins>
   </build>
 

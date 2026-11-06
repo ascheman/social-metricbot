@@ -18,22 +18,47 @@ package io.github.bmarwell.social.metricbot.db.dao;
 import io.github.bmarwell.social.metricbot.db.pdo.MastodonStatusPdo;
 import jakarta.annotation.Nullable;
 import jakarta.enterprise.context.Dependent;
-import jakarta.persistence.EntityManager;
-import jakarta.persistence.PersistenceContext;
+import jakarta.enterprise.inject.Instance;
+import jakarta.inject.Inject;
 import java.io.Serializable;
 import java.time.Instant;
 import java.util.Optional;
 
+/**
+ * Vidocq port: the public signatures are unchanged, so no caller in the bot module was touched.
+ * Only the internals moved from {@code EntityManager} to Mansart's Jakarta Data repository.
+ *
+ * <p>Mapping of the JPA calls that are gone:
+ *
+ * <ul>
+ *   <li>{@code entityManager.find(T, id)} → {@code findById(id)}
+ *   <li>{@code entityManager.merge(e)} → {@code save(e)}, which already has upsert semantics, so
+ *       the explicit find-then-insert-or-update branch is no longer needed
+ *   <li>{@code entityManager.detach(e)} → dropped. Mansart returns detached instances; there is no
+ *       persistence context to evict from.
+ * </ul>
+ */
 @Dependent
 public class MastodonStatusRepository implements Serializable {
 
-    @PersistenceContext(name = "metricbot-persistence-unit")
-    private EntityManager entityManager;
+    private static final long serialVersionUID = 1L;
 
-    public Optional<MastodonStatusPdo> findById(String id) {
-        @Nullable var pdo = entityManager.find(MastodonStatusPdo.class, id);
+    /**
+     * Indirect via {@code Instance<>}: Mansart registers the generated repository implementation
+     * through its own runtime SPI ({@code _MansartComponents}), not through Vauban's
+     * compile-time bean index. A module that consumes this class therefore cannot resolve
+     * MastodonStatusData statically, and a direct {@code @Inject} fails the build with
+     * "Unsatisfied dependency". Same reason as the DataSource in SocialMetricBotDataSource.
+     */
+    @Inject
+    Instance<MastodonStatusData> statusDataInstance;
 
-        return Optional.ofNullable(pdo);
+    private MastodonStatusData statusData() {
+        return this.statusDataInstance.get();
+    }
+
+    public Optional<MastodonStatusPdo> findById(final String id) {
+        return this.statusData().findById(id);
     }
 
     public MastodonStatusPdo upsert(
@@ -41,26 +66,13 @@ public class MastodonStatusRepository implements Serializable {
             final Instant tweetTime,
             final @Nullable String botResponseId,
             final @Nullable Instant responseTime) {
-        Optional<MastodonStatusPdo> existing =
-                Optional.ofNullable(this.entityManager.find(MastodonStatusPdo.class, id));
+        final MastodonStatusPdo pdo =
+                this.statusData().findById(id).orElseGet(() -> new MastodonStatusPdo(id, tweetTime));
 
-        if (existing.isPresent()) {
-            MastodonStatusPdo pdo = existing.orElseThrow();
-            pdo.setBotResponseId(botResponseId);
-            pdo.setResponseTime(responseTime);
-
-            this.entityManager.merge(pdo);
-            this.entityManager.detach(pdo);
-
-            return pdo;
-        }
-
-        MastodonStatusPdo pdo = new MastodonStatusPdo(id, tweetTime);
         pdo.setBotResponseId(botResponseId);
         pdo.setResponseTime(responseTime);
 
-        this.entityManager.merge(pdo);
-        this.entityManager.detach(pdo);
+        this.statusData().save(pdo);
 
         return pdo;
     }

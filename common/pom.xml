@@ -13,6 +13,20 @@
   <name>Social-MetricBot :: common</name>
 
   <dependencies>
+    <!-- Vidocq port: the @ConfigProperty injection points live in THIS module, so Ravel and
+         its codegen must be visible here. Without them Vauban does not recognise
+         @ConfigProperty as a qualifier and reports the config fields as unsatisfied. -->
+    <dependency>
+      <groupId>io.vidocq.runtime.extensions.microprofile</groupId>
+      <artifactId>vidocq-runtime-ravel-config-extension</artifactId>
+      <scope>provided</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>io.vidocq.vauban</groupId>
+      <artifactId>vauban-indexer</artifactId>
+      <version>${vidocq.version}</version>
+    </dependency>
     <!-- JavaEE APIs -->
     <dependency>
       <groupId>jakarta.inject</groupId>
@@ -30,5 +44,30 @@
       <scope>provided</scope>
     </dependency>
   </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <annotationProcessorPaths combine.children="append">
+            <path>
+              <groupId>io.vidocq.runtime</groupId>
+              <artifactId>vidocq-runtime-core-codegen</artifactId>
+              <version>${vidocq.version}</version>
+              <type>pom</type>
+            </path>
+            <path>
+              <groupId>io.vidocq.runtime.extensions.microprofile</groupId>
+              <artifactId>vidocq-runtime-ravel-config-extension-codegen</artifactId>
+              <version>${vidocq.version}</version>
+              <type>pom</type>
+            </path>
+          </annotationProcessorPaths>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
 
 </project>

@@ -23,7 +23,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import io.github.bmarwell.social.metricbot.common.MastodonConfig;
-import jakarta.enterprise.concurrent.ManagedScheduledExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
 import jakarta.enterprise.event.Event;
 import jakarta.servlet.ServletContextEvent;
 import java.util.concurrent.TimeUnit;
@@ -39,7 +39,7 @@ class MastodonResponseProducerTest {
     MastodonConfig mastodonConfig;
 
     @Mock
-    ManagedScheduledExecutorService scheduler;
+    ScheduledExecutorService scheduler;
 
     @Mock
     UnprocessedMastodonStatusQueueHolder unprocessedMastodonStatusQueueHolder;
@@ -48,8 +48,14 @@ class MastodonResponseProducerTest {
     @SuppressWarnings("rawtypes")
     Event processEvent;
 
+    // Vidocq port: pre-initialised on purpose. Vauban weaves a
+    // `protected MastodonResponseProducer(io.vidocq.vauban.api.ProxyLink)` constructor into every bean at
+    // compile time. Mockito's @InjectMocks tries constructor injection first and picks the
+    // BIGGEST constructor, so it built the object with a null ProxyLink and then skipped
+    // field injection entirely — every @Mock stayed null. Assigning the field here forces
+    // Mockito onto property/field injection, which is what this test wants.
     @InjectMocks
-    MastodonResponseProducer producer;
+    MastodonResponseProducer producer = new MastodonResponseProducer();
 
     @BeforeEach
     void setUp() {

@@ -17,11 +17,11 @@ package io.github.bmarwell.social.metricbot.web.mastodon;
 
 import io.github.bmarwell.social.metricbot.common.MastodonConfig;
 import io.github.bmarwell.social.metricbot.mastodon.MastodonStatus;
-import jakarta.annotation.Resource;
-import jakarta.enterprise.concurrent.ManagedScheduledExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
 import jakarta.enterprise.event.Event;
 import jakarta.inject.Inject;
 import jakarta.servlet.ServletContextEvent;
+import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.servlet.ServletContextListener;
 import jakarta.servlet.annotation.WebListener;
 import java.util.concurrent.ScheduledFuture;
@@ -29,13 +29,18 @@ import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+// Vidocq port: @ApplicationScoped is REQUIRED here. On Open Liberty this class became a
+// bean through beans.xml bean-discovery-mode="all" (CDI Full). Vauban is CDI Lite, which
+// only recognises bean-defining annotations, so without this the class is not a bean and
+// Foy never registers the listener — the application silently does nothing.
+@ApplicationScoped
 @WebListener
 public class MastodonResponseProducer implements ServletContextListener {
 
     private static final Logger LOG = LoggerFactory.getLogger(MastodonResponseProducer.class);
 
-    @Resource
-    private ManagedScheduledExecutorService scheduler;
+    @Inject
+    ScheduledExecutorService scheduler;
 
     @Inject
     private UnprocessedMastodonStatusQueueHolder unprocessedMastodonStatusQueueHolder;

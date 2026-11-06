@@ -30,8 +30,14 @@ class MastodonProducerTest {
     @Mock
     MastodonConfig mastodonConfig;
 
+    // Vidocq port: pre-initialised on purpose. Vauban weaves a
+    // `protected MastodonProducer(io.vidocq.vauban.api.ProxyLink)` constructor into every bean at
+    // compile time. Mockito's @InjectMocks tries constructor injection first and picks the
+    // BIGGEST constructor, so it built the object with a null ProxyLink and then skipped
+    // field injection entirely — every @Mock stayed null. Assigning the field here forces
+    // Mockito onto property/field injection, which is what this test wants.
     @InjectMocks
-    MastodonProducer producer;
+    MastodonProducer producer = new MastodonProducer();
 
     @BeforeEach
     void setUp() {

@@ -14,11 +14,32 @@
   <name>Social-MetricBot :: BlueSky client</name>
 
   <dependencies>
+    <!-- Vidocq port: cassini-client needs a JSON-B provider to (de)serialise entities.
+         Without one, jakarta.json.bind falls back to Yasson BY NAME and fails with
+         ClassNotFoundException: org.eclipse.yasson.JsonBindingProvider. -->
+    <dependency>
+      <groupId>io.vidocq.champollion</groupId>
+      <artifactId>champollion-api</artifactId>
+      <version>${vidocq.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.champollion</groupId>
+      <artifactId>champollion-jsonb</artifactId>
+      <version>${vidocq.version}</version>
+      <scope>runtime</scope>
+    </dependency>
+
     <dependency>
       <groupId>jakarta.ws.rs</groupId>
       <artifactId>jakarta.ws.rs-api</artifactId>
       <version>${dependency.jaxrs-api.version}</version>
       <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.cassini</groupId>
+      <artifactId>cassini-client</artifactId>
+      <version>${vidocq.version}</version>
+      <scope>runtime</scope>
     </dependency>
 
     <dependency>

@@ -18,13 +18,13 @@ package io.github.bmarwell.social.metricbot.web.bsky.web;
 import io.github.bmarwell.social.metricbot.common.BlueSkyBotConfig;
 import io.github.bmarwell.social.metricbot.web.bsky.processing.BskyProcessRequest;
 import io.github.bmarwell.social.metricbot.web.bsky.processing.UnprocessedBskyStatusQueueHolder;
-import jakarta.annotation.Resource;
-import jakarta.enterprise.concurrent.ManagedExecutorService;
-import jakarta.enterprise.concurrent.ManagedScheduledExecutorService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
 import jakarta.enterprise.event.Event;
 import jakarta.enterprise.event.NotificationOptions;
 import jakarta.inject.Inject;
 import jakarta.servlet.ServletContextEvent;
+import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.servlet.ServletContextListener;
 import jakarta.servlet.annotation.WebListener;
 import java.io.Serial;
@@ -36,6 +36,11 @@ import org.slf4j.LoggerFactory;
 /**
  * Will poll from the Queue and fire an event.
  */
+// Vidocq port: @ApplicationScoped is REQUIRED here. On Open Liberty this class became a
+// bean through beans.xml bean-discovery-mode="all" (CDI Full). Vauban is CDI Lite, which
+// only recognises bean-defining annotations, so without this the class is not a bean and
+// Foy never registers the listener — the application silently does nothing.
+@ApplicationScoped
 @WebListener
 public class BskyResponseProducer implements ServletContextListener, Serializable {
 
@@ -44,11 +49,11 @@ public class BskyResponseProducer implements ServletContextListener, Serializabl
 
     private static final Logger LOG = LoggerFactory.getLogger(BskyResponseProducer.class);
 
-    @Resource
-    private ManagedScheduledExecutorService scheduler;
+    @Inject
+    ScheduledExecutorService scheduler;
 
-    @Resource
-    private ManagedExecutorService executor;
+    @Inject
+    ExecutorService executor;
 
     @Inject
     private UnprocessedBskyStatusQueueHolder unprocessedBskyStatusQueueHolder;

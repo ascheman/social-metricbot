@@ -15,10 +15,27 @@
 
   <dependencies>
     <dependency>
+      <groupId>io.vidocq.champollion</groupId>
+      <artifactId>champollion-api</artifactId>
+      <version>${vidocq.version}</version>
+    </dependency>
+    <dependency>
       <groupId>jakarta.ws.rs</groupId>
       <artifactId>jakarta.ws.rs-api</artifactId>
       <version>${dependency.jaxrs-api.version}</version>
       <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.cassini</groupId>
+      <artifactId>cassini-client</artifactId>
+      <version>${vidocq.version}</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.vidocq.champollion</groupId>
+      <artifactId>champollion-jsonb</artifactId>
+      <version>${vidocq.version}</version>
+      <scope>runtime</scope>
     </dependency>
     <dependency>
       <groupId>jakarta.json</groupId>

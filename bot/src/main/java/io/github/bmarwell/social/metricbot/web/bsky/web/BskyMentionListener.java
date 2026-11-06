@@ -19,12 +19,12 @@ import io.github.bmarwell.social.metricbot.bsky.BlueSkyClient;
 import io.github.bmarwell.social.metricbot.bsky.BskyStatus;
 import io.github.bmarwell.social.metricbot.web.bsky.api.BskyProducer;
 import io.github.bmarwell.social.metricbot.web.bsky.event.BskyMentionEvent;
-import jakarta.annotation.Resource;
-import jakarta.enterprise.concurrent.ManagedExecutorService;
-import jakarta.enterprise.concurrent.ManagedScheduledExecutorService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
 import jakarta.enterprise.event.Event;
 import jakarta.inject.Inject;
 import jakarta.servlet.ServletContextEvent;
+import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.servlet.ServletContextListener;
 import jakarta.servlet.annotation.WebListener;
 import java.util.List;
@@ -33,16 +33,21 @@ import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+// Vidocq port: @ApplicationScoped is REQUIRED here. On Open Liberty this class became a
+// bean through beans.xml bean-discovery-mode="all" (CDI Full). Vauban is CDI Lite, which
+// only recognises bean-defining annotations, so without this the class is not a bean and
+// Foy never registers the listener — the application silently does nothing.
+@ApplicationScoped
 @WebListener
 public class BskyMentionListener implements ServletContextListener {
 
     private static final Logger LOG = LoggerFactory.getLogger(BskyMentionListener.class);
 
-    @Resource
-    private ManagedScheduledExecutorService scheduler;
+    @Inject
+    ScheduledExecutorService scheduler;
 
-    @Resource
-    private ManagedExecutorService executor;
+    @Inject
+    ExecutorService executor;
 
     @Inject
     private BskyProducer bskyProducer;
@@ -73,7 +78,8 @@ public class BskyMentionListener implements ServletContextListener {
     }
 
     protected void retrieveMentions() {
-        final var unused = executor.copy(this.bsky.getRecentMentions())
+        // Vidocq port: copy() has no JDK equivalent; the executor now runs the dependent stage.
+        final var unused = this.bsky.getRecentMentions()
                 // no method returning void?
                 .handle((final List<BskyStatus> result, final Throwable error) -> {
                     if (error != null) {

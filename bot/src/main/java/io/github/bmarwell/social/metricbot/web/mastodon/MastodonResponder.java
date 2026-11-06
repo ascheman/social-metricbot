@@ -22,8 +22,7 @@ import io.github.bmarwell.social.metricbot.db.pdo.MastodonStatusPdo;
 import io.github.bmarwell.social.metricbot.mastodon.*;
 import io.github.bmarwell.social.metricbot.web.AbstractResponder;
 import jakarta.annotation.Nullable;
-import jakarta.annotation.Resource;
-import jakarta.enterprise.concurrent.ManagedExecutorService;
+import java.util.concurrent.ExecutorService;
 import jakarta.enterprise.context.Dependent;
 import jakarta.enterprise.event.Observes;
 import jakarta.enterprise.inject.Instance;
@@ -43,8 +42,8 @@ public class MastodonResponder extends AbstractResponder {
 
     private static final Logger LOG = LoggerFactory.getLogger(MastodonResponder.class);
 
-    @Resource
-    private ManagedExecutorService executor;
+    @Inject
+    ExecutorService executor;
 
     @Inject
     private Instance<MastodonResponder> self;
@@ -224,9 +223,13 @@ public class MastodonResponder extends AbstractResponder {
                 statusToSend.replyToId(),
                 statusToSend.tootText().replaceAll("\n", "\\\\n"));
         MastodonClient clientCopy = this.mastodonClient;
-        CompletableFuture<Optional<MastodonStatus>> handled = executor.copy(clientCopy.postStatus(statusToSend))
+        // Vidocq port: ManagedExecutorService.copy() has no java.util.concurrent equivalent.
+        // The original future is used directly and the executor is passed to the dependent stage,
+        // which is what copy() arranged for async stages. Context propagation is lost.
+        CompletableFuture<Optional<MastodonStatus>> handled = clientCopy
+                .postStatus(statusToSend)
                 .orTimeout(30, TimeUnit.SECONDS)
-                .handleAsync(MastodonResponder::resultOrLog);
+                .handleAsync(MastodonResponder::resultOrLog, executor);
 
         return handled.join();
     }
@@ -260,10 +263,13 @@ public class MastodonResponder extends AbstractResponder {
         if (status.inReplyToId().isPresent()) {
             final MastodonStatusId inReplyToStatusId = status.inReplyToId().orElseThrow();
             // get status
-            Optional<MastodonStatus> ancestor = executor.copy(this.mastodonClient.getStatusById(inReplyToStatusId))
+            Optional<MastodonStatus> ancestor = this.mastodonClient
+                    .getStatusById(inReplyToStatusId)
                     .orTimeout(5, TimeUnit.SECONDS)
-                    .handleAsync((Optional<MastodonStatus> result, Throwable error) ->
-                            logOrReturnRetrievedTweet(inReplyToStatusId, result, error))
+                    .handleAsync(
+                            (Optional<MastodonStatus> result, Throwable error) ->
+                                    logOrReturnRetrievedTweet(inReplyToStatusId, result, error),
+                            executor)
                     .join();
             if (ancestor.isEmpty()) {
                 return Optional.empty();
