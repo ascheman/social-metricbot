@@ -596,14 +596,25 @@ default boolean accept(Path path) {
 }
 ----
 
-This is categorical rather than a gap waiting to be filled.
+That exclusion is deliberate, and it is a stopgap rather than a design statement.
+It arrived with https://github.com/openrewrite/rewrite/pull/4380[rewrite#4380], _Ignore `module-info.java` files for now_, in August 2024, because until then the parser failed on these files instead of skipping them.
+
+The gap behind it is real.
 The Java syntax tree has no node for a module declaration at all: it carries `Package`, `Import`, `ClassDeclaration` and some sixty others, but nothing for `requires`, `exports` or `opens`, and the javac visitor that builds the tree contains no module handling.
+
+Support is tracked, and already diagnosed, in https://github.com/openrewrite/rewrite/issues/4054[rewrite#4054].
+A maintainer placed the cause in August 2024: the Java 11+ parsers park the module declaration in the compilation unit's `eof` space, so proper support means mapping the module and directive elements in the Java 11, 17 and 21 parsers -- described there as likely not complicated, but not yet done.
+The issue is open, carries a failing unit test marked with JUnit Pioneer's `ExpectedToFail`, was still being curated on 2026-10-30, and sits in the backlog without a milestone.
+An earlier attempt, rewrite#1925, was never merged, and https://github.com/openrewrite/rewrite/issues/1895[rewrite#1895] -- where `AutoFormat` emptied a `module-info.java` -- was closed as not planned.
 
 [IMPORTANT]
 ====
-The largest manual item in this port, the missing module descriptors, is out of reach for OpenRewrite by construction.
+The largest manual item in this port, the missing module descriptors, is out of reach for OpenRewrite today, and stays so for as long as rewrite#4054 is unscheduled.
 A recipe could only write a module descriptor as plain text -- which is exactly what `vidocq:complete-module-info` already does, as an "idempotent zero-dependency text insertion".
-Module descriptors belong on Vidocq's side of the line permanently, and the recipes should not attempt them.
+
+Even once rewrite#4054 lands, parsing is necessary but not sufficient.
+Knowing _which_ modules an application must `requires` means reading the extension catalog, and knowing which packages it must `opens` means analysing the compiled classes, as `ReflectedPackages` does.
+Both are Vidocq's knowledge rather than OpenRewrite's, so module descriptors stay on Vidocq's side of the line either way, and the recipes should not attempt them.
 ====
 
 === The extension catalog is machine readable, and already shipped
@@ -711,6 +722,7 @@ The remaining quarter decides whether the application is *correct*, and the wors
 Automating more of the mechanical part raises the value of checking its output; it does not lower it.
 ====
 
+[[vidocq-migrate]]
 === A vehicle: `vidocq migrate`
 
 The CLI has a service-loader extension point for exactly this purpose:
@@ -727,6 +739,10 @@ public interface VidocqCliPlugin {
 Its own documentation says it "lets third-party modules contribute extra top-level commands to the Vidocq CLI without forking it".
 A migration tool can therefore ship as `vidocq migrate`: run the recipes, then call `add-extension` and `doctor --fix` for the parts a recipe structurally cannot do.
 That also settles the relationship between the two halves, because the recipes become a consumer of Vidocq's catalog rather than a second, divergent copy of it.
+
+The name would have to change, though.
+`migrate` is already taken inside Vidocq for *database* migration: the `migration` extension wraps Flyway, and its dev console panel offers actions named `migrate` and `clean-and-migrate`.
+`vidocq port` or `vidocq modernize` would not collide.
 
 
 [[open-points]]
