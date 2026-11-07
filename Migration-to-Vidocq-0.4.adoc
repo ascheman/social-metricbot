@@ -65,7 +65,7 @@ Both are detailed in <<open-points>>.
 
 |`server.xml` -> `vidocq.properties`
 |no
-|No mechanical equivalent; the values have to be understood
+|Done by hand here, and the values have to be understood -- but mechanizable, see <<automation>>
 
 |JPA -> Jakarta Data
 |no
@@ -527,6 +527,25 @@ The `foy-servlet` codegen bundle was absent from `annotationProcessorPaths` for 
 Build green, tests green, application working, `anomalies: none` -- and `vidocq:doctor` flags it immediately with the exact fix.
 This is a strong argument for putting `vidocq:doctor` in front of every migration, and for making it part of CI.
 
+[[f-15]]
+=== `check-module-info` cannot see the `requires` the catalog states
+
+*Classification*: bug candidate, confirmed against `main` of 2026-11-06.
+
+Vidocq describes an extension's module requirements in two different places.
+`META-INF/vidocq/extension.properties`, aggregated into a generated `extension-catalog.properties`, carries `module-info.requires`, `module-info.requires.static` and the `opens` flags; 24 extensions ship a descriptor and 6 of them use those keys.
+`META-INF/vidocq/module-requirements.properties` carries `requires`, `opens` and `opens.to.<module>`; exactly one extension ships it.
+
+`vidocq:check-module-info` and `vidocq:complete-module-info` read only the second file.
+Everything else in the tool chain -- `list-extensions`, `checkpom`, the codegen paths -- reads the catalog.
+So the check cannot see, for example, that an application using `cassini-rest` has to declare `requires jakarta.ws.rs` itself, which is precisely what the catalog says and what Cassini does not re-export.
+
+The `opens` half of the check is not affected: it is computed from the compiled classes by `ReflectedPackages`, which inspects entities, REST resources and interceptors and is considerably better than a descriptor flag.
+It is the `requires` half that is unreachable.
+
+A fix, with a test that fails without it, is prepared on `fix/module-info-catalog-requires`: the collector consults the catalog in addition to the descriptor.
+One thing it cannot repair is that `Requirement` models only `REQUIRES` and `OPENS`, so the two `module-info.requires.static` entries in the catalog still cannot be checked.
+
 === One worry that turned out to be unfounded
 
 Compile-time DI with no reflection sounds incompatible with `@Inject private` fields, of which this application has 26.
@@ -548,6 +567,167 @@ In rough order of value, from the perspective of someone migrating an existing a
 . Put `vidocq:doctor`, `vidocq:add-extension` and `vidocq:run` in front of the migration documentation (<<tooling>>).
   They cover a surprising amount of what is otherwise manual work, and they were found here only after the fact.
 . Consider a short "coming from Open Liberty / WildFly" page stating the three structural gaps up front: no `@Resource`, no Jakarta Concurrency, Jakarta Data instead of Jakarta Persistence.
+
+. Let `vidocq:check-module-info` read the extension catalog, so the `requires` it states are actually checked (<<f-15>>).
+  A fix and a failing test are prepared; the remaining gap is that `requires static` cannot be modelled.
+. Consider making the generated `extension-catalog.properties` part of a published artifact's public contract (<<automation>>).
+  It already exists in `vidocq-runtime-tooling` and is generated from the per-extension descriptors by a test, which is the right design; a migration tool, an IDE plugin or a recipe generator would simply like to depend on it deliberately rather than by accident.
+
+[[automation]]
+== How much more could be automated
+
+This section answers a question that came up only after the port was finished.
+If Vidocq's own tool chain already covers this much of the work (<<tooling>>), can the recipes in {rewrite-project}[rewrite-vidocq] -- or some other tool -- take over a larger share of the migration?
+
+The answer is yes, and by more than this port assumed.
+But the division of labour between an OpenRewrite recipe and a Vidocq goal is not a matter of taste: one hard technical boundary decides it.
+
+NOTE: Everything below is static inspection of the released {vidocq-version} artifacts, of `rewrite-java` 8.89.0 and of the Vidocq sources at `32f71ef5` (2026-11-06), with one exception: the fix referenced in <<f-15>> was built and tested.
+
+=== The boundary: OpenRewrite cannot see a module declaration
+
+OpenRewrite excludes `module-info.java` from parsing outright:
+
+[source,java]
+----
+// org.openrewrite.java.JavaParser, rewrite-java 8.89.0
+default boolean accept(Path path) {
+    return path.toString().endsWith(".java") && !path.endsWith("module-info.java");
+}
+----
+
+This is categorical rather than a gap waiting to be filled.
+The Java syntax tree has no node for a module declaration at all: it carries `Package`, `Import`, `ClassDeclaration` and some sixty others, but nothing for `requires`, `exports` or `opens`, and the javac visitor that builds the tree contains no module handling.
+
+[IMPORTANT]
+====
+The largest manual item in this port, the missing module descriptors, is out of reach for OpenRewrite by construction.
+A recipe could only write a module descriptor as plain text -- which is exactly what `vidocq:complete-module-info` already does, as an "idempotent zero-dependency text insertion".
+Module descriptors belong on Vidocq's side of the line permanently, and the recipes should not attempt them.
+====
+
+=== The extension catalog is machine readable, and already shipped
+
+Every extension jar carries a descriptor at `META-INF/vidocq/extension.properties`, whose own header states that the Vidocq CLI builds its extension catalog from it.
+It holds precisely the knowledge the recipes encode by hand:
+
+[source,properties]
+----
+id = cassini-rest
+description = Jakarta REST (JAX-RS) endpoints
+family = jakarta-ee
+codegen = vidocq-runtime-cassini-rest-extension-codegen
+module-info.requires.static = java.compiler
+module-info.requires = jakarta.cdi, jakarta.inject, jakarta.ws.rs, jakarta.json.bind, io.vidocq.cassini.api
+module-info.opens-application-package = true
+----
+
+`mansart-pool` goes further and declares the dev service that provides it under `vidocq dev` and the tests, the JDBC driver that dev service starts on, and the block appended to `vidocq.properties` line by line.
+`mansart-data` declares `requires-extensions = mansart-pool`, the extension it cannot work without.
+
+This changes the design of the recipe project.
+Its per-extension recipes restate by hand what the descriptors already state declaratively, so they go stale at every Vidocq release -- and they already miss three things the catalog knows:
+
+Inter-extension dependencies:: `mansart-data` requires `mansart-pool`.
+The recipes add extensions independently, so a project that asks only for Jakarta Data gets repositories with no data source.
+The configuration block:: the keys an extension needs in `vidocq.properties`, with their comments, in a defined order.
+This port wrote them by hand after reading the extension source.
+The dev services:: the test-scope wiring that lets `mvn test` start a database.
+
+[TIP]
+====
+The right shape is a generator: read the catalog, emit the per-extension recipes.
+Hand-written recipes then shrink to what no catalog can describe -- removing the *old* runtime's build, and the Java source rewrites.
+====
+
+=== What the tool chain already does, and this port did by hand
+
+<<tooling>> lists the goals; three of them do more than was apparent at the time.
+
+`vidocq:doctor -Dvidocq.doctor.fix`:: repairs what the project checks report as fixable: "the codegen paths, `module-info.java`, the Maven wrapper".
+The missing codegen bundle of <<f-14>> was found with `doctor` and then fixed by hand, although the flag that would have repaired it was already there.
+`vidocq:add-extension`:: writes the dependency, the codegen bundle and the module directives for a comma-separated list of catalog ids, in one step.
+`vauban:modularize`:: patches the non-modular jars of the runtime closure with a generated module descriptor, with an optional licence allow-list that turns the goal into a redistribution gate.
+It is part of Vauban {vidocq-version}, not of the runtime plugin, which is why it was missed here.
+It matters a great deal: non-modular dependencies are most of what makes writing module descriptors by hand unpleasant, and this port has several.
+
+=== Where the remaining automation pays, in order
+
+. *`server.xml` to `vidocq.properties`, as a scanning recipe.*
+The division-of-labour table above calls this "no mechanical equivalent", and that judgement was too pessimistic.
+OpenRewrite reads XML as a syntax tree and can emit a properties file from the same recipe, and a scanning recipe is precisely the mechanism for reading one file and generating another.
+The mapping is data, and it is the same mapping in every Liberty project.
+Of all the automation that does not exist yet, this has the clearest payoff.
+. *Validation, ahead of further transformation.*
+<<f-7>> -- specification APIs left in `provided` scope -- survived a green build *and* 122 green tests and failed only at startup.
+The transformation was one attribute per dependency; what was missing was a check.
+A check of the deployable's runtime closure is worth more than ten further transformation recipes, and it belongs in `vidocq:doctor`, which sees the resolved dependency graph, rather than in a recipe, which sees only source.
+. *`@Resource` to `@Inject`.*
+A type-aware Java rewrite, which is what OpenRewrite is for; today the recipes only report these sites.
+There is also a path this port did not take: a `naming` extension exists, which answers JNDI `java:` names declared in `vidocq.properties` from CDI beans, so a JNDI name can be kept rather than removed.
+<<f-3>> stands either way, since `jakarta.annotation.Resource` appears nowhere in the Vidocq source tree, but the annotation can be replaced by a lookup as well as by an injection point.
+. *Jakarta Persistence to Jakarta Data: assistive, not automatic.*
+The two `BasicRepository<T, ID>` interfaces are generatable from the entity and its id type.
+The call-site rewrite of `find`, `merge` and `detach` to `findById`, `save` and nothing at all is pattern-shaped.
+The decisions are not: that `URI` becomes `String` because Mansart runs no `AttributeConverter`, and which converters are deleted rather than rewritten.
+. *The `Instance<>` indirection: deliberately not automated.*
+<<f-9>> is mechanically applicable everywhere, which is the reason to leave it alone.
+It is a workaround for the compile-time validator not seeing beans contributed at runtime, and a recipe would cement the limitation instead of reporting it.
+
+=== What share of this port was mechanical
+
+Measured on the port commit, with this report excluded:
+
+.Change by kind
+[cols="2,1,2,3"]
+|===
+|Kind |Files |Lines |Automatable
+
+|`pom.xml`
+|8
+|+372 / -212
+|Almost entirely, and largely already automated
+
+|`server.xml`, properties
+|5
+|+26 / -236
+|Yes, with the scanning recipe above
+
+|Java
+|18
+|+413 / -162
+|Partly, see below
+|===
+
+Of the Java, a single file accounts for 110 of the added lines and almost none of it is mechanical: `BotExecutors`, where virtual threads replace the container's managed executors, `@Typed` resolves the ambiguity of <<f-11>>, and `@PreDestroy` replaces the `@Disposes` methods that cannot work.
+That is the part of this port that needed a decision rather than a transformation.
+
+So roughly three quarters of the change is mechanical in principle.
+
+[CAUTION]
+====
+That number is less encouraging than it looks.
+The remaining quarter decides whether the application is *correct*, and the worst defect of this port, <<f-7>>, lived inside the mechanical three quarters, where a green build and a green test run both missed it.
+Automating more of the mechanical part raises the value of checking its output; it does not lower it.
+====
+
+=== A vehicle: `vidocq migrate`
+
+The CLI has a service-loader extension point for exactly this purpose:
+
+[source,java]
+----
+public interface VidocqCliPlugin {
+    String command();        // the top-level command token
+    String description();    // shown in `vidocq help`
+    int run(String[] args);  // the exit code
+}
+----
+
+Its own documentation says it "lets third-party modules contribute extra top-level commands to the Vidocq CLI without forking it".
+A migration tool can therefore ship as `vidocq migrate`: run the recipes, then call `add-extension` and `doctor --fix` for the parts a recipe structurally cannot do.
+That also settles the relationship between the two halves, because the recipes become a consumer of Vidocq's catalog rather than a second, divergent copy of it.
+
 
 [[open-points]]
 == Open points
