@@ -722,8 +722,8 @@ The remaining quarter decides whether the application is *correct*, and the wors
 Automating more of the mechanical part raises the value of checking its output; it does not lower it.
 ====
 
-[[vidocq-migrate]]
-=== A vehicle: `vidocq migrate`
+[[vidocq-rewrite]]
+=== A vehicle: `vidocq rewrite`
 
 The CLI has a service-loader extension point for exactly this purpose:
 
@@ -737,12 +737,11 @@ public interface VidocqCliPlugin {
 ----
 
 Its own documentation says it "lets third-party modules contribute extra top-level commands to the Vidocq CLI without forking it".
-A migration tool can therefore ship as `vidocq migrate`: run the recipes, then call `add-extension` and `doctor --fix` for the parts a recipe structurally cannot do.
+A migration tool can therefore ship as `vidocq rewrite`: run the recipes, then call `add-extension` and `doctor --fix` for the parts a recipe structurally cannot do.
 That also settles the relationship between the two halves, because the recipes become a consumer of Vidocq's catalog rather than a second, divergent copy of it.
 
-The name would have to change, though.
-`migrate` is already taken inside Vidocq for *database* migration: the `migration` extension wraps Flyway, and its dev console panel offers actions named `migrate` and `clean-and-migrate`.
-`vidocq port` or `vidocq modernize` would not collide.
+`rewrite` rather than `migrate`, because `migrate` is already taken inside Vidocq for *database* migration: the `migration` extension wraps Flyway, and its dev console panel offers actions named `migrate` and `clean-and-migrate`.
+`vidocq rewrite` collides with nothing in the 19 built-in commands, and names what the tool does to the source.
 
 
 [[open-points]]
