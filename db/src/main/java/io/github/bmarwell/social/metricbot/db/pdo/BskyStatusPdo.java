@@ -80,7 +80,7 @@ public class BskyStatusPdo {
     }
 
     public Optional<URI> getBotResponseAtUri() {
-        return Optional.ofNullable(this.botResponseAtUri).filter(uri -> uri.equals(EMPTY_URI));
+        return Optional.ofNullable(this.botResponseAtUri).filter(uri -> !EMPTY_URI.equals(uri));
     }
 
     public void setBotResponseAtUri(final @Nullable URI botResponseAtUri) {
